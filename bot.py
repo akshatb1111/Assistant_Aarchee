@@ -1,6 +1,5 @@
 import logging
 import pytz
-from keep_alive import *
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -219,7 +218,6 @@ async def main():
     application_instance.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, message_handler))
 
     scheduler.start()
-    keep_alive()
     await application_instance.run_polling()
 
 if __name__ == "__main__":
