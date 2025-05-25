@@ -21,6 +21,10 @@ import os
 
 # ========== CONFIG ===========
 BOT_TOKEN = os.environ.get("BOT_TOKEN")  # Injected via Replit Secrets
+# Allowed masters IDs as comma-separated string, e.g. "12345678,87654321"
+ALLOWED_MASTER_IDS = os.environ.get("ALLOWED_MASTER_IDS", "")
+ALLOWED_MASTERS = set(int(mid.strip()) for mid in ALLOWED_MASTER_IDS.split(",") if mid.strip())
+
 IST = pytz.timezone("Asia/Kolkata")
 
 logging.basicConfig(
@@ -69,15 +73,12 @@ QUESTIONS = [
 scheduler = AsyncIOScheduler(timezone=IST)
 
 
-async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def register_group_by_mention(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
 
-    # Only allow group chats
-    if update.effective_chat.type not in ("group", "supergroup"):
-        await update.message.reply_text(
-            "Please add me to a group with you and the client, then run /register here."
-        )
+    if user_id not in ALLOWED_MASTERS:
+        await update.message.reply_text("Sorry, you are not authorized to register this bot in groups.")
         return
 
     if chat_id in registered_groups:
@@ -89,12 +90,35 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "state": None,
         "question_idx": None
     }
-    await update.message.reply_text(
-        "Group registered successfully! The bot will now start asking scheduled questions."
-    )
+    await update.message.reply_text("Group registered successfully! The bot will now start asking scheduled questions.")
 
-    # Schedule questions for this group
     schedule_questions(chat_id, user_id)
+
+
+async def mention_register_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    chat = update.effective_chat
+
+    if chat.type not in ("group", "supergroup"):
+        return  # Only react in groups
+
+    # Check if the bot was mentioned/tagged in this message
+    if not message or not message.entities:
+        return
+
+    for entity in message.entities:
+        if entity.type in ("mention", "text_mention"):
+            # For mention type, get the username mentioned, compare with bot username
+            # For text_mention, entity.user contains the user object
+            if entity.type == "mention":
+                mentioned_username = message.text[entity.offset:entity.offset + entity.length]
+                if mentioned_username.lower() == f"@{context.bot.username.lower()}":
+                    await register_group_by_mention(update, context)
+                    return
+            elif entity.type == "text_mention":
+                if entity.user and entity.user.id == context.bot.id:
+                    await register_group_by_mention(update, context)
+                    return
 
 
 def schedule_questions(chat_id, master_id):
@@ -129,10 +153,6 @@ async def ask_question(chat_id, master_id, question_index):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
-        # Use a global Application instance's bot to send message
-        # We will get it from the context later in callback; for this scheduled function,
-        # we'll have to handle differently in main()
-        # Here just log error if bot not initialized properly.
         global application_instance
         await application_instance.bot.send_message(chat_id=chat_id,
                                                     text=question["text"],
@@ -162,7 +182,7 @@ async def answer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in registered_groups:
         await query.edit_message_text(
             text=
-            "This group is not registered. Please run /register in this group."
+            "This group is not registered. Please mention me in this group to register."
         )
         return
 
@@ -180,8 +200,10 @@ async def answer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Notify master privately
         await context.bot.send_message(
             chat_id=master_id,
-            text=
-            f"⚠️ Deviation alert from group {chat_id}:\nQuestion: {question['text']}\nClient answered NO.",
+            text=(
+                f"⚠️ Deviation alert from group {chat_id}:\n"
+                f"Question: {question['text']}\nClient answered NO."
+            ),
         )
 
 
@@ -199,21 +221,21 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             registered_groups[chat_id]["state"] = None
             registered_groups[chat_id]["question_idx"] = None
         else:
-            await update.message.reply_text("Please send a photo as requested."
-                                            )
+            await update.message.reply_text("Please send a photo as requested.")
     elif state == "awaiting_explanation":
         if update.message.text:
             explanation = update.message.text
             master_id = registered_groups[chat_id]["master_id"]
             question = QUESTIONS[q_idx]
 
-            await update.message.reply_text(
-                "✅ Explanation received, thank you!")
+            await update.message.reply_text("✅ Explanation received, thank you!")
 
             await context.bot.send_message(
                 chat_id=master_id,
-                text=
-                f"⚠️ Explanation from group {chat_id}:\nQuestion: {question['text']}\nExplanation: {explanation}",
+                text=(
+                    f"⚠️ Explanation from group {chat_id}:\n"
+                    f"Question: {question['text']}\nExplanation: {explanation}"
+                ),
             )
             registered_groups[chat_id]["state"] = None
             registered_groups[chat_id]["question_idx"] = None
@@ -225,7 +247,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Hello Master! \n"
         "Create a group with your client and add me (the bot).\n"
-        "Then run /register in that group to activate the bot.")
+        "Then mention/tag me in the group chat to activate the bot."
+    )
 
 
 async def main():
@@ -233,10 +256,17 @@ async def main():
     application_instance = ApplicationBuilder().token(BOT_TOKEN).build()
 
     application_instance.add_handler(CommandHandler("start", start))
-    application_instance.add_handler(CommandHandler("register", register))
+    # You may keep /register command or remove it if you want.
+    # application_instance.add_handler(CommandHandler("register", register))
+
+    # New handler to register group when bot is mentioned
+    application_instance.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, mention_register_handler))
+
+    # Callback query handler for answers
     application_instance.add_handler(CallbackQueryHandler(answer_callback))
-    application_instance.add_handler(
-        MessageHandler(filters.ALL & ~filters.COMMAND, message_handler))
+
+    # Message handler for photos/explanations
+    application_instance.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, message_handler))
 
     scheduler.start()
 
