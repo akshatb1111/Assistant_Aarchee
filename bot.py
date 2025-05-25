@@ -214,6 +214,8 @@ async def main():
 
     scheduler.start()
 
+    keep_alive()
+
     await application_instance.run_polling()
 
 
