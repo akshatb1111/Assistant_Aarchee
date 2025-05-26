@@ -205,7 +205,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Hello Dt Aruna! \nCreate a group with your client and add me (@assistant_aarchee_bot).\nThen mention/tag me in the group chat to activate the bot."
+        "Hello Dt Aruna! \nCreate a group with your client and add me (@vitaalya_bot).\nThen mention/tag me in the group chat to activate the bot."
     )
 
 async def main():
